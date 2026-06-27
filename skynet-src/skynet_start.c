@@ -34,11 +34,19 @@ struct worker_parm {
 };
 
 static volatile int SIG = 0;
+static volatile int SIG_USR1 = 0;
 
 static void
 handle_hup(int signal) {
 	if (signal == SIGHUP) {
 		SIG = 1;
+	}
+}
+
+static void
+handle_usr1(int signal) {
+	if (signal == SIGUSR1) {
+		SIG_USR1 = 1;
 	}
 }
 
@@ -63,7 +71,12 @@ wakeup(struct monitor *m, int busy) {
 static void *
 thread_socket(void *p) {
 	struct monitor * m = p;
+	// skynet_initthread(THREAD_SOCKET); 的作用是设置当前线程的线程局部变量（TLS），
+	// 标记为 SOCKET 类型线程，以便 skynet 框架内部基于线程类别进行不同处理、统计或调度。
 	skynet_initthread(THREAD_SOCKET);
+
+	// skynet_handle_register_thread(); 的作用是为当前线程分配一个唯一的 reader slot 下标（TLS_SLOT_IDX），
+	// 并绑定到线程局部变量，用于线程安全地管理 handle 查询，提高并发场景下的句柄表读性能。
 	skynet_handle_register_thread();
 	for (;;) {
 		int r = skynet_socket_poll();
@@ -127,6 +140,19 @@ signal_hup() {
 	}
 }
 
+static void
+signal_usr1() {
+	struct skynet_message smsg;
+	smsg.source = 0;
+	smsg.session = 0;
+	smsg.data = NULL;
+	smsg.sz = (size_t)PTYPE_SYSTEM << MESSAGE_TYPE_SHIFT;
+	uint32_t listener = skynet_handle_findname("shutdown_listener");
+	if (listener) {
+		skynet_context_push(listener, &smsg);
+	}
+}
+
 static void *
 thread_timer(void *p) {
 	struct monitor * m = p;
@@ -141,6 +167,10 @@ thread_timer(void *p) {
 		if (SIG) {
 			signal_hup();
 			SIG = 0;
+		}
+		if (SIG_USR1) {
+			signal_usr1();
+			SIG_USR1 = 0;
 		}
 	}
 	// wakeup socket thread
@@ -264,12 +294,15 @@ bootstrap(uint32_t logger_handle, const char * cmdline) {
 
 void
 skynet_start(struct skynet_config * config) {
-	// register SIGHUP for log file reopen
+
 	struct sigaction sa;
 	sa.sa_handler = &handle_hup;
 	sa.sa_flags = SA_RESTART;
 	sigfillset(&sa.sa_mask);
 	sigaction(SIGHUP, &sa, NULL);
+
+	sa.sa_handler = &handle_usr1;
+	sigaction(SIGUSR1, &sa, NULL);
 
 	if (config->daemon) {
 		if (daemon_init(config->daemon)) {

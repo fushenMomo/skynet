@@ -113,21 +113,21 @@ struct socket {
 };
 
 struct socket_server {
-	volatile uint64_t time;
+	volatile uint64_t time;// 等同于 TI->current
 	int reserve_fd;	// for EMFILE
-	int recvctrl_fd;
-	int sendctrl_fd;
-	int checkctrl;
-	poll_fd event_fd;
-	ATOM_INT alloc_id;
-	int event_n;
-	int event_index;
-	struct socket_object_interface soi;
-	struct event ev[MAX_EVENT];
-	struct socket slot[MAX_SOCKET];
-	char buffer[MAX_INFO];
-	uint8_t udpbuffer[MAX_UDP_PACKAGE];
-	fd_set rfds;
+	int recvctrl_fd;// 管道读端
+	int sendctrl_fd;// 管道写端
+	int checkctrl;// 是否需要检查内部命令的标识
+	poll_fd event_fd;// event poll
+	ATOM_INT alloc_id;// socket id分配器
+	int event_n;// 一次捕获到事件总数，该值小于等于 MAX_EVENT
+	int event_index;// 已处理过的事件索引
+	struct socket_object_interface soi;// userobjuect 接口
+	struct event ev[MAX_EVENT];// 捕获的事件数组
+	struct socket slot[MAX_SOCKET];// socket 数组
+	char buffer[MAX_INFO];// 临时存放需要转发给其他服务的消息数据
+	uint8_t udpbuffer[MAX_UDP_PACKAGE];// 接收的udp包
+	fd_set rfds;// select fd set
 };
 
 struct request_open {
@@ -395,6 +395,8 @@ socket_server_create(uint64_t time) {
 		skynet_error(NULL, "socket-server error: create event pool failed.");
 		return NULL;
 	}
+	// pipe函数用于创建一个管道，它会在fd数组中返回一对文件描述符：fd[0]为读端，fd[1]为写端。
+	// 在socket_server中，它们用于实现服务线程和socket线程（I/O线程）之间的消息通知/控制命令传递。
 	if (pipe(fd)) {
 		sp_release(efd);
 		skynet_error(NULL, "socket-server error: create socket pair failed.");
@@ -415,14 +417,28 @@ socket_server_create(uint64_t time) {
 	ss->recvctrl_fd = fd[0];
 	ss->sendctrl_fd = fd[1];
 	ss->checkctrl = 1;
-	ss->reserve_fd = dup(1);	// reserve an extra fd for EMFILE
+	// 这里通过 dup(1) 复制标准输出(文件描述符1)，目的是预留一个备用的文件描述符，
+	// 用于后续系统出现“Too many open files”(EMFILE)错误时使用。
+	// 当产生EMFILE错误时，可以先关闭这个预留的fd，从而暂时释放一个fd，保证关键的清理或日志操作还能正常进行。
+	ss->reserve_fd = dup(1);
 
+	/*
+		这段代码用于初始化 socket_server 结构体中的所有 socket 槽（slot）。
+
+		- 通过 for 循环遍历 MAX_SOCKET（即允许的最大 socket 数量）范围内的每一个 slot。
+		- 每个 slot 实际上是一个 struct socket 对象（通过 ss->slot[i] 取出）。
+		- 对 slot 的 type 字段用 ATOM_INIT 初始化为 SOCKET_TYPE_INVALID，表示该 socket 处于不可用/未分配状态。
+		- high 和 low 是两个写缓冲队列（高优先级和低优先级），通过 clear_wb_list 置空队列指针。
+		- dw_lock 是用于保护写缓冲队列和数据发送的自旋锁，通过 spinlock_init 初始化。
+
+		通过这段初始化代码，可确保 socket_server 每个槽都处于已知的、有效的初始态，从而方便后续的 socket 分配和回收管理。
+	*/
 	for (i=0;i<MAX_SOCKET;i++) {
 		struct socket *s = &ss->slot[i];
-		ATOM_INIT(&s->type, SOCKET_TYPE_INVALID);
-		clear_wb_list(&s->high);
-		clear_wb_list(&s->low);
-		spinlock_init(&s->dw_lock);
+		ATOM_INIT(&s->type, SOCKET_TYPE_INVALID);   // 初始化类型为无效
+		clear_wb_list(&s->high);                    // 清空高优先级写缓冲
+		clear_wb_list(&s->low);                     // 清空低优先级写缓冲
+		spinlock_init(&s->dw_lock);                 // 初始化写锁
 	}
 	ATOM_INIT(&ss->alloc_id , 0);
 	ss->event_n = 0;

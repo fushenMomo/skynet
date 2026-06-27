@@ -219,7 +219,15 @@ static void socket_keepalive(int fd) {
     assert(ret != SOCKET_ERROR);
 }
 
+/*
+ * Windows 下通常没有 Unix 的 pipe(2) 这种匿名管道，这里用 TCP 本地回环 socket 对来模拟 pipe。
+ * 生成的 client_sock 和 client_fd 的作用类似于 pipe 返回的 fd[0]（读端） 和 fd[1]（写端）:
+ * - client_sock：服务端accept返回的 socket fd，相当于 pipe 的一端。多数情况下用于"读"端。
+ * - client_fd：主动 connect 的 socket fd，相当于 pipe 的另一端。多数情况下用于"写"端。
+ * 两端间进行本地TCP通信，实现匿名管道的效果。（当然你完全可以反着用，只要上下处理一致即可。）
+ */
 int pipe(int fd[2]) {
+    // 创建一个本地监听socket
     int listen_fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (listen_fd == INVALID_SOCKET) {
         return -1;
@@ -230,7 +238,7 @@ int pipe(int fd[2]) {
     sin.sin_addr.S_un.S_addr = inet_addr("127.0.0.1");
 
     srand(time(NULL));
-    // use random port(range from 60000 to 60999) to simulate pipe()
+    // 随机选择端口号模拟 pipe
     int port;
     for (;;) {
         port = 60000 + rand() % 1000;
@@ -246,6 +254,7 @@ int pipe(int fd[2]) {
 
     socket_keepalive(listen_fd);
 
+    // client_fd 主动连接 listen_fd
     int client_fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (client_fd == INVALID_SOCKET) {
         closesocket(listen_fd);
@@ -258,6 +267,7 @@ int pipe(int fd[2]) {
         return -1;
     }
 
+    // server 端（listen_fd）accept 返回 client_sock
     struct sockaddr_in client_addr;
     size_t name_len = sizeof(client_addr);
     int client_sock = accept(listen_fd, (struct sockaddr*)&client_addr, &name_len);
@@ -267,10 +277,11 @@ int pipe(int fd[2]) {
         return -1;
     }
 
-    closesocket(listen_fd);  // Close listen socket as it's no longer needed
+    closesocket(listen_fd);  // 监听 socket 不再需要
 
-    fd[0] = client_sock;
-    fd[1] = client_fd;
+    // 返回 pipe 两端的 fd
+    fd[0] = client_sock; // 可视为"读端"
+    fd[1] = client_fd;   // 可视为"写端"
 
     socket_keepalive(client_sock);
     socket_keepalive(client_fd);

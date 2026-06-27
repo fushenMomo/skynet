@@ -244,6 +244,9 @@ get_dest_string(lua_State *L, int index) {
 
 static int
 send_message(lua_State *L, int source, int idx_type) {
+	// 这里获得的服务是当前 Lua 环境绑定的 skynet_context，
+	// 不是目标服务，而是当前正在执行的服务。
+	// lua_upvalueindex(1) 用于获取绑定在第一个 upvalue 处的 userdata（即 skynet_context 指针）。
 	struct skynet_context * context = lua_touserdata(L, lua_upvalueindex(1));
 	uint32_t dest = (uint32_t)lua_tointeger(L, 1);
 	const char * dest_string = NULL;

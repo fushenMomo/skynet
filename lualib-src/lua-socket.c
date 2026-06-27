@@ -884,7 +884,7 @@ luaopen_skynet_socketdriver(lua_State *L) {
 		{ "connect", lconnect },
 		{ "close", lclose },
 		{ "shutdown", lshutdown },
-		{ "listen", llisten },
+		{ "listen", llisten },////这里是监听函数
 		{ "send", lsend },
 		{ "lsend", lsendlow },
 		{ "bind", lbind },

@@ -1,4 +1,5 @@
-local driver = require "skynet.socketdriver"
+--这里会调用 luaopen_skynet_socketdriver ,最后返回一个库
+local driver = require "skynet.socketdriver" 
 local skynet = require "skynet"
 local skynet_core = require "skynet.core"
 local assert = assert

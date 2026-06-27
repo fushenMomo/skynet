@@ -36,21 +36,36 @@ function gateserver.start(handler)
 
 	local listen_context = {}
 
-	function CMD.open( source, conf )
+	-- 该函数为 gateserver 提供 "open" 操作的实现，用于开启监听套接字并初始化大厅服务监听。
+	function CMD.open(source, conf)
+		-- 确保当前没有已有的套接字在监听（不能重复开启）
 		assert(not socket)
+		-- 读取监听地址和端口，默认监听 0.0.0.0（所有网卡）
 		local address = conf.address or "0.0.0.0"
 		local port = conf.port
+		-- 读取最大客户端连接数，默认1024
 		maxclient = conf.maxclient or 1024
+		-- 是否开启 nodelay（禁用Nagle算法）
 		nodelay = conf.nodelay
+
+		-- 打印监听信息
 		skynet.error("Listen on", address, port)
+		
+		-- 创建监听套接字
 		socket = socketdriver.listen(address, port, conf.backlog)
+		-- 记录当前协程和监听fd
 		listen_context.co = coroutine.running()
 		listen_context.fd = socket
+		-- 阻塞当前协程，等待唤醒（socket 建设完成后会 resume）
 		skynet.wait(listen_context.co)
+		-- listener resume后，会把真正绑定的 address/port 放到 listen_context
 		conf.address = listen_context.addr
 		conf.port = listen_context.port
+		-- 清空 listen_context 防止后续误用
 		listen_context = nil
+		-- 开始监听
 		socketdriver.start(socket)
+		-- 如果有 handler.open，回调业务层 open
 		if handler.open then
 			return handler.open(source, conf)
 		end
